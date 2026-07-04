@@ -1,0 +1,36 @@
+﻿experiment:
+  name: cheng2020_int8_ptq
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-anchor
+  quality: 3
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak
+  root: data/kodak
+  calibration_root: data/calibration
+  batch_size: 1
+  num_workers: 0
+
+precision:
+  mode: int8_ptq
+  weight_quantization: per_channel
+  activation_quantization: per_tensor
+  backend: fbgemm
+  mixed_precision:
+    keep_entropy_model_fp32: true
+    keep_likelihoods_fp32: true
+
+evaluation:
+  metrics:
+    - bpp
+    - psnr
+    - ms_ssim
+  save_reconstructions: false
+
+output:
+  dir: results/raw/cheng2020_int8_ptq

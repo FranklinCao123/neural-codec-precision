@@ -1,0 +1,43 @@
+﻿experiment:
+  name: cheng2020_int8_qat
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-anchor
+  quality: 3
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak
+  root: data/kodak
+  train_root: data/train
+  calibration_root: data/calibration
+  batch_size: 4
+  num_workers: 4
+
+precision:
+  mode: int8_qat
+  weight_quantization: per_channel
+  activation_quantization: per_tensor
+  backend: fbgemm
+  mixed_precision:
+    keep_entropy_model_fp32: true
+    keep_likelihoods_fp32: true
+
+training:
+  epochs: 5
+  learning_rate: 1.0e-5
+  lambda_rd: 0.015
+  loss: rate_distortion
+
+evaluation:
+  metrics:
+    - bpp
+    - psnr
+    - ms_ssim
+  save_reconstructions: false
+
+output:
+  dir: results/raw/cheng2020_int8_qat
