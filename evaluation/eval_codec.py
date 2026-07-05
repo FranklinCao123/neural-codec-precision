@@ -144,7 +144,8 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
     rows = []
     reset_peak_memory(device)
     for batch in dataloader:
-        x = batch["image"].to(device)
+        x_ref = batch["image"].to(device)
+        x = x_ref
         name = batch["name"][0]
         _, _, height, width = x.shape
         x_padded, original_shape = _pad_to_multiple(x, pad_multiple)
@@ -170,7 +171,7 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
         decode_time = time.perf_counter() - start
 
         x_hat = _crop_to_shape(decompressed["x_hat"], original_shape)
-        x_hat = x_hat.clamp(0.0, 1.0)
+        x_hat = x_hat.float().clamp(0.0, 1.0)
 
         row = {
             "name": name,
@@ -192,9 +193,9 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
                 precision=forward_precision,
             )
         if "psnr" in metrics:
-            row["psnr"] = compute_psnr(x, x_hat)
+            row["psnr"] = compute_psnr(x_ref, x_hat)
         if "ms_ssim" in metrics or "msssim" in metrics:
-            row["ms_ssim"] = compute_ms_ssim(x, x_hat)
+            row["ms_ssim"] = compute_ms_ssim(x_ref, x_hat)
 
         if save_reconstructions:
             _save_reconstruction(x_hat, recon_dir / f"{name}.png")

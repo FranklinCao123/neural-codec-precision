@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from evaluation.eval_codec import build_image_dataloader, evaluate_codec, save_results
 from models.compressai_models import load_model_from_config
+from quantization.fp16 import apply_fp16_policy
 
 
 def _load_yaml(path: Path) -> dict:
@@ -69,6 +70,12 @@ def main() -> None:
         print("Warning: FP16 forward timing is only enabled on CUDA; falling back to FP32 forward.")
 
     model = load_model_from_config(config)
+    precision_cfg = config.get("precision", {})
+    model = apply_fp16_policy(
+        model,
+        keep_entropy_model_fp32=bool(precision_cfg.get("keep_entropy_model_fp32", True)),
+        modules=precision_cfg.get("fp16_modules"),
+    )
     dataloader = build_image_dataloader(config)
 
     results = evaluate_codec(model, dataloader, config, device=device)
