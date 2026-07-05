@@ -26,6 +26,7 @@ evaluation:
     - ms_ssim
   codec_precision: fp16
   benchmark_forward: true
+  benchmark_memory: true
   forward_precision: fp16
   forward_warmup: 1
   forward_repeats: 3

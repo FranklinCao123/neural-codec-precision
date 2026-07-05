@@ -13,6 +13,12 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
+from evaluation.benchmark import (
+    compression_ratio_from_bpp,
+    model_size_summary,
+    peak_memory_mb,
+    reset_peak_memory,
+)
 from evaluation.metrics import compute_bpp, compute_ms_ssim, compute_psnr
 
 
@@ -130,11 +136,13 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
     forward_repeats = int(eval_cfg.get("forward_repeats", 3))
     forward_precision = eval_cfg.get("forward_precision", config.get("precision", {}).get("mode", "fp32"))
     codec_precision = eval_cfg.get("codec_precision", "fp32")
+    benchmark_memory = bool(eval_cfg.get("benchmark_memory", True))
 
     output_dir = Path(config.get("output", {}).get("dir", "results/raw/experiment"))
     recon_dir = output_dir / "reconstructions"
 
     rows = []
+    reset_peak_memory(device)
     for batch in dataloader:
         x = batch["image"].to(device)
         name = batch["name"][0]
@@ -173,6 +181,7 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
             "encode_time_sec": encode_time,
             "decode_time_sec": decode_time,
         }
+        row["compression_ratio_rgb8"] = compression_ratio_from_bpp(row["bpp"])
         if benchmark_forward:
             row["forward_time_sec"] = _measure_forward_time(
                 model,
@@ -192,7 +201,7 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
 
         rows.append(row)
 
-    summary = _summarize(rows, config)
+    summary = _summarize(rows, config, model, device, benchmark_memory)
     return {
         "summary": summary,
         "images": rows,
@@ -233,7 +242,13 @@ def _autocast_context(device: torch.device, precision: str):
     return nullcontext
 
 
-def _summarize(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
+def _summarize(
+    rows: list[dict[str, Any]],
+    config: dict,
+    model,
+    device: torch.device,
+    benchmark_memory: bool,
+) -> dict[str, Any]:
     def mean(key: str) -> float | None:
         values = [row[key] for row in rows if key in row]
         if not values:
@@ -258,8 +273,14 @@ def _summarize(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
         "avg_encode_time_sec": mean("encode_time_sec"),
         "avg_decode_time_sec": mean("decode_time_sec"),
         "avg_forward_time_sec": mean("forward_time_sec"),
+        "avg_compression_ratio_rgb8": mean("compression_ratio_rgb8"),
         "total_bits": int(sum(row["num_bits"] for row in rows)),
     }
+    summary.update(model_size_summary(model))
+    if benchmark_memory:
+        peak = peak_memory_mb(device)
+        if peak is not None:
+            summary["peak_cuda_memory_mb"] = peak
     return {key: value for key, value in summary.items() if value is not None}
 
 

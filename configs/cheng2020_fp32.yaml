@@ -24,6 +24,7 @@ evaluation:
     - psnr
     - ms_ssim
   benchmark_forward: true
+  benchmark_memory: true
   forward_warmup: 1
   forward_repeats: 3
   save_reconstructions: false
