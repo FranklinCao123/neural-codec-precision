@@ -124,6 +124,9 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
     metrics = set(eval_cfg.get("metrics", ["bpp", "psnr", "ms_ssim"]))
     pad_multiple = int(eval_cfg.get("pad_multiple", 64))
     save_reconstructions = bool(eval_cfg.get("save_reconstructions", False))
+    benchmark_forward = bool(eval_cfg.get("benchmark_forward", True))
+    forward_warmup = int(eval_cfg.get("forward_warmup", 1))
+    forward_repeats = int(eval_cfg.get("forward_repeats", 3))
 
     output_dir = Path(config.get("output", {}).get("dir", "results/raw/experiment"))
     recon_dir = output_dir / "reconstructions"
@@ -165,6 +168,14 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
             "encode_time_sec": encode_time,
             "decode_time_sec": decode_time,
         }
+        if benchmark_forward:
+            row["forward_time_sec"] = _measure_forward_time(
+                model,
+                x_padded,
+                device,
+                warmup=forward_warmup,
+                repeats=forward_repeats,
+            )
         if "psnr" in metrics:
             row["psnr"] = compute_psnr(x, x_hat)
         if "ms_ssim" in metrics or "msssim" in metrics:
@@ -180,6 +191,27 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
         "summary": summary,
         "images": rows,
     }
+
+
+def _measure_forward_time(
+    model,
+    x: torch.Tensor,
+    device: torch.device,
+    warmup: int,
+    repeats: int,
+) -> float:
+    for _ in range(max(warmup, 0)):
+        _ = model(x)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+    start = time.perf_counter()
+    for _ in range(max(repeats, 1)):
+        _ = model(x)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+    return (time.perf_counter() - start) / float(max(repeats, 1))
 
 
 def _summarize(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
@@ -206,6 +238,7 @@ def _summarize(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
         "avg_ms_ssim": mean("ms_ssim"),
         "avg_encode_time_sec": mean("encode_time_sec"),
         "avg_decode_time_sec": mean("decode_time_sec"),
+        "avg_forward_time_sec": mean("forward_time_sec"),
         "total_bits": int(sum(row["num_bits"] for row in rows)),
     }
     return {key: value for key, value in summary.items() if value is not None}
