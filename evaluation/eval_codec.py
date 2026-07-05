@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import time
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,8 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
     benchmark_forward = bool(eval_cfg.get("benchmark_forward", True))
     forward_warmup = int(eval_cfg.get("forward_warmup", 1))
     forward_repeats = int(eval_cfg.get("forward_repeats", 3))
+    forward_precision = eval_cfg.get("forward_precision", config.get("precision", {}).get("mode", "fp32"))
+    codec_precision = eval_cfg.get("codec_precision", "fp32")
 
     output_dir = Path(config.get("output", {}).get("dir", "results/raw/experiment"))
     recon_dir = output_dir / "reconstructions"
@@ -141,7 +144,8 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         start = time.perf_counter()
-        compressed = model.compress(x_padded)
+        with _autocast_context(device, codec_precision)():
+            compressed = model.compress(x_padded)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         encode_time = time.perf_counter() - start
@@ -151,7 +155,8 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         start = time.perf_counter()
-        decompressed = model.decompress(compressed["strings"], compressed["shape"])
+        with _autocast_context(device, codec_precision)():
+            decompressed = model.decompress(compressed["strings"], compressed["shape"])
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         decode_time = time.perf_counter() - start
@@ -175,6 +180,7 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
                 device,
                 warmup=forward_warmup,
                 repeats=forward_repeats,
+                precision=forward_precision,
             )
         if "psnr" in metrics:
             row["psnr"] = compute_psnr(x, x_hat)
@@ -199,19 +205,32 @@ def _measure_forward_time(
     device: torch.device,
     warmup: int,
     repeats: int,
+    precision: str = "fp32",
 ) -> float:
+    autocast_context = _autocast_context(device, precision)
     for _ in range(max(warmup, 0)):
-        _ = model(x)
+        with autocast_context():
+            _ = model(x)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
     start = time.perf_counter()
     for _ in range(max(repeats, 1)):
-        _ = model(x)
+        with autocast_context():
+            _ = model(x)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
     return (time.perf_counter() - start) / float(max(repeats, 1))
+
+
+def _autocast_context(device: torch.device, precision: str):
+    precision = precision.lower()
+    if precision == "fp16" and device.type == "cuda":
+        return lambda: torch.autocast(device_type="cuda", dtype=torch.float16)
+    if precision == "bf16" and device.type == "cuda":
+        return lambda: torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+    return nullcontext
 
 
 def _summarize(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
