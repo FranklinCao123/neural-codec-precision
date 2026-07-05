@@ -48,6 +48,7 @@ def convert_modules_to_fp16(model, modules: list[str] | tuple[str, ...]):
         if isinstance(module, AutoCastInput):
             module = module.module
         module.half()
+        setattr(model, module_name, AutoCastInput(module, output_dtype=torch.float32))
     return model
 
 
