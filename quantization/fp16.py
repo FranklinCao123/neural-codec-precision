@@ -12,7 +12,6 @@ PRECISION_BOUNDARY_MODULES = (
     "g_s",
     "h_a",
     "h_s",
-    "context_prediction",
     "entropy_parameters",
 )
 
