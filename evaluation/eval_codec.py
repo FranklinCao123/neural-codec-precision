@@ -278,6 +278,8 @@ def _summarize(
         "total_bits": int(sum(row["num_bits"] for row in rows)),
     }
     summary.update(model_size_summary(model))
+    if hasattr(model, "_quantization_summary"):
+        summary.update(model._quantization_summary)
     if benchmark_memory:
         peak = peak_memory_mb(device)
         if peak is not None:

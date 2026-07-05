@@ -1,5 +1,5 @@
 experiment:
-  name: cheng2020_int8_ptq_transforms
+  name: cheng2020_int8_ptq_gs
   seed: 1234
 
 model:
@@ -17,15 +17,12 @@ data:
   num_workers: 0
 
 precision:
-  mode: int8_ptq_transforms
+  mode: int8_ptq_gs
   method: weight_fake_quant
   weight_quantization: per_channel
   activation_quantization: none
   int8_modules:
-    - g_a
     - g_s
-    - h_a
-    - h_s
   mixed_precision:
     keep_entropy_model_fp32: true
     keep_likelihoods_fp32: true
@@ -42,4 +39,4 @@ evaluation:
   save_reconstructions: false
 
 output:
-  dir: results/raw/cheng2020_int8_ptq_transforms
+  dir: results/raw/cheng2020_int8_ptq_gs
