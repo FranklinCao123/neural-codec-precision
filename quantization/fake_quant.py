@@ -97,6 +97,9 @@ def _is_fixed_point_dtype(fake_dtype: str) -> bool:
         "int8",
         "fixed_int8",
         "fixed8",
+        "int10",
+        "fixed_int10",
+        "fixed10",
         "int12",
         "fixed_int12",
         "fixed12",
@@ -109,7 +112,7 @@ def _is_fixed_point_dtype(fake_dtype: str) -> bool:
 def _fixed_point_bits(fake_dtype: str, precision_cfg: dict) -> int:
     if precision_cfg.get("fixed_point_bits") is not None:
         return int(precision_cfg["fixed_point_bits"])
-    for bits in (8, 12, 16):
+    for bits in (8, 10, 12, 16):
         if str(bits) in fake_dtype:
             return bits
     raise ValueError(f"Cannot infer fixed-point bit width from fake dtype: {fake_dtype!r}")
