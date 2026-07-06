@@ -41,10 +41,15 @@ def apply_activation_fake_quant(model, config: dict):
     if fake_dtype in {"bf16", "bfloat16"}:
         quantize_fn = fake_bf16
         method = "bf16_activation_fake_quant"
-    elif fake_dtype in {"int16", "fixed_int16", "fixed16"}:
+    elif _is_fixed_point_dtype(fake_dtype):
+        num_bits = _fixed_point_bits(fake_dtype, precision_cfg)
         fractional_bits = precision_cfg.get("fractional_bits")
-        quantize_fn = lambda tensor: fake_fixed_point(tensor, num_bits=16, fractional_bits=fractional_bits)
-        method = "int16_activation_fixed_point_fake_quant"
+        quantize_fn = lambda tensor: fake_fixed_point(
+            tensor,
+            num_bits=num_bits,
+            fractional_bits=fractional_bits,
+        )
+        method = f"int{num_bits}_activation_fixed_point_fake_quant"
     elif fake_dtype in {"fp8", "fp8_e4m3", "e4m3"}:
         quantize_fn = lambda tensor: fake_fp8(tensor, exponent_bits=4, mantissa_bits=3)
         method = "fp8_e4m3_activation_fake_quant"
@@ -70,8 +75,11 @@ def apply_activation_fake_quant(model, config: dict):
         "activation_fake_dtype": fake_dtype,
         "num_activation_fake_quant_modules": len(stats),
     }
-    if fake_dtype in {"int16", "fixed_int16", "fixed16"}:
-        model._quantization_summary["fixed_point_bits"] = 16
+    if _is_fixed_point_dtype(fake_dtype):
+        model._quantization_summary["fixed_point_bits"] = _fixed_point_bits(
+            fake_dtype,
+            precision_cfg,
+        )
         if precision_cfg.get("fractional_bits") is not None:
             model._quantization_summary["fixed_point_fractional_bits"] = int(
                 precision_cfg["fractional_bits"]
@@ -82,6 +90,29 @@ def apply_activation_fake_quant(model, config: dict):
 def fake_bf16(tensor: torch.Tensor) -> torch.Tensor:
     """Round a floating tensor through BF16 and return FP32/normal dtype values."""
     return tensor.to(torch.bfloat16).to(torch.float32).to(tensor.dtype)
+
+
+def _is_fixed_point_dtype(fake_dtype: str) -> bool:
+    return fake_dtype in {
+        "int8",
+        "fixed_int8",
+        "fixed8",
+        "int12",
+        "fixed_int12",
+        "fixed12",
+        "int16",
+        "fixed_int16",
+        "fixed16",
+    }
+
+
+def _fixed_point_bits(fake_dtype: str, precision_cfg: dict) -> int:
+    if precision_cfg.get("fixed_point_bits") is not None:
+        return int(precision_cfg["fixed_point_bits"])
+    for bits in (8, 12, 16):
+        if str(bits) in fake_dtype:
+            return bits
+    raise ValueError(f"Cannot infer fixed-point bit width from fake dtype: {fake_dtype!r}")
 
 
 def fake_fixed_point(
