@@ -117,7 +117,14 @@ class FixedPointProbeCollector:
     fractional_bits: int | None = None
     storage_dtype: torch.dtype = torch.int16
     storage_mode: str = "tensor"
+    module_bits: dict[str, int] = field(default_factory=dict)
     modules: dict[str, ModuleProbeStats] = field(default_factory=dict)
+
+    def bits_for(self, module_name: str) -> int:
+        return int(self.module_bits.get(module_name, self.num_bits))
+
+    def storage_dtype_for(self, module_name: str) -> torch.dtype:
+        return _storage_dtype_for_bits(self.bits_for(module_name))
 
     def stats_for(self, module_name: str) -> ModuleProbeStats:
         if module_name not in self.modules:
@@ -134,6 +141,7 @@ class FixedPointProbeCollector:
         return {
             "probe_method": "fixed_point_activation_probe",
             "fixed_point_bits": self.num_bits,
+            "module_fixed_point_bits": self.module_bits,
             "fixed_point_fractional_bits": self.fractional_bits,
             "integer_storage_dtype": str(self.storage_dtype).replace("torch.", ""),
             "storage_mode": self.storage_mode,
@@ -179,24 +187,26 @@ class FixedPointProbeOutput(nn.Module):
         return _map_floating_tensors(output, self._probe_tensor)
 
     def _probe_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
+        num_bits = self.collector.bits_for(self.module_name)
+        storage_dtype = self.collector.storage_dtype_for(self.module_name)
         dequantized, integer_tensor, scale, qmin, qmax = quantize_to_fixed_point_integer(
             tensor,
-            num_bits=self.collector.num_bits,
+            num_bits=num_bits,
             fractional_bits=self.collector.fractional_bits,
-            storage_dtype=self.collector.storage_dtype,
+            storage_dtype=storage_dtype,
         )
         pack_time = 0.0
         unpack_time = 0.0
         if self.collector.storage_mode == "packed":
             packed, pack_time = pack_fixed_point_tensor(
                 integer_tensor,
-                num_bits=self.collector.num_bits,
+                num_bits=num_bits,
                 qmin=qmin,
             )
             integer_tensor, unpack_time = unpack_fixed_point_tensor(
                 packed,
                 shape=tuple(integer_tensor.shape),
-                num_bits=self.collector.num_bits,
+                num_bits=num_bits,
                 qmin=qmin,
                 device=integer_tensor.device,
                 dtype=integer_tensor.dtype,
@@ -211,7 +221,7 @@ class FixedPointProbeOutput(nn.Module):
             scale=scale,
             qmin=qmin,
             qmax=qmax,
-            storage_dtype=self.collector.storage_dtype,
+            storage_dtype=storage_dtype,
             pack_time_sec=pack_time,
             unpack_time_sec=unpack_time,
         )
@@ -226,6 +236,10 @@ def apply_fixed_point_probe(model, config: dict):
         modules = list(DEFAULT_PROBE_MODULES)
 
     num_bits = int(precision_cfg.get("fixed_point_bits", 16))
+    module_bits = {
+        str(name): int(bits)
+        for name, bits in (precision_cfg.get("module_fixed_point_bits") or {}).items()
+    }
     fractional_bits = precision_cfg.get("fractional_bits")
     if fractional_bits is not None:
         fractional_bits = int(fractional_bits)
@@ -236,6 +250,7 @@ def apply_fixed_point_probe(model, config: dict):
         fractional_bits=fractional_bits,
         storage_dtype=storage_dtype,
         storage_mode=storage_mode,
+        module_bits=module_bits,
     )
 
     for module_name in modules:
@@ -251,6 +266,7 @@ def apply_fixed_point_probe(model, config: dict):
         "quantization_method": "fixed_point_activation_probe",
         "activation_quantized_modules": list(modules),
         "fixed_point_bits": num_bits,
+        "module_fixed_point_bits": module_bits,
         "integer_storage_dtype": str(storage_dtype).replace("torch.", ""),
         "storage_mode": storage_mode,
     }
