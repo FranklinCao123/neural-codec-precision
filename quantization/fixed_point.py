@@ -8,6 +8,7 @@ can continue unchanged.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,8 @@ class ModuleProbeStats:
     integer_storage_bytes: int = 0
     packed_storage_bits: int = 0
     saturated_values: int = 0
+    pack_time_sec: float = 0.0
+    unpack_time_sec: float = 0.0
     min_float: float | None = None
     max_float: float | None = None
     min_int: int | None = None
@@ -44,6 +47,8 @@ class ModuleProbeStats:
         qmin: int,
         qmax: int,
         storage_dtype: torch.dtype,
+        pack_time_sec: float = 0.0,
+        unpack_time_sec: float = 0.0,
     ) -> None:
         self.calls += 1
         numel = int(tensor.numel())
@@ -51,6 +56,8 @@ class ModuleProbeStats:
         self.original_float_bytes += numel * int(tensor.element_size())
         self.integer_storage_bytes += numel * _dtype_size(storage_dtype)
         self.packed_storage_bits += numel * (qmax.bit_length() + 1)
+        self.pack_time_sec += pack_time_sec
+        self.unpack_time_sec += unpack_time_sec
 
         if numel == 0:
             return
@@ -92,6 +99,8 @@ class ModuleProbeStats:
             "saturation_ratio": (
                 float(self.saturated_values) / float(self.num_values) if self.num_values else 0.0
             ),
+            "pack_time_sec": self.pack_time_sec,
+            "unpack_time_sec": self.unpack_time_sec,
             "min_float": self.min_float,
             "max_float": self.max_float,
             "min_int": self.min_int,
@@ -107,6 +116,7 @@ class FixedPointProbeCollector:
     num_bits: int
     fractional_bits: int | None = None
     storage_dtype: torch.dtype = torch.int16
+    storage_mode: str = "tensor"
     modules: dict[str, ModuleProbeStats] = field(default_factory=dict)
 
     def stats_for(self, module_name: str) -> ModuleProbeStats:
@@ -126,6 +136,7 @@ class FixedPointProbeCollector:
             "fixed_point_bits": self.num_bits,
             "fixed_point_fractional_bits": self.fractional_bits,
             "integer_storage_dtype": str(self.storage_dtype).replace("torch.", ""),
+            "storage_mode": self.storage_mode,
             "total_activation_values": total_values,
             "total_original_float_bytes": total_float_bytes,
             "total_integer_storage_bytes": total_integer_bytes,
@@ -143,6 +154,8 @@ class FixedPointProbeCollector:
             ),
             "total_saturated_values": saturated,
             "total_saturation_ratio": float(saturated) / float(total_values) if total_values else 0.0,
+            "total_pack_time_sec": sum(row["pack_time_sec"] for row in module_rows),
+            "total_unpack_time_sec": sum(row["unpack_time_sec"] for row in module_rows),
             "modules": module_rows,
         }
 
@@ -172,6 +185,26 @@ class FixedPointProbeOutput(nn.Module):
             fractional_bits=self.collector.fractional_bits,
             storage_dtype=self.collector.storage_dtype,
         )
+        pack_time = 0.0
+        unpack_time = 0.0
+        if self.collector.storage_mode == "packed":
+            packed, pack_time = pack_fixed_point_tensor(
+                integer_tensor,
+                num_bits=self.collector.num_bits,
+                qmin=qmin,
+            )
+            integer_tensor, unpack_time = unpack_fixed_point_tensor(
+                packed,
+                shape=tuple(integer_tensor.shape),
+                num_bits=self.collector.num_bits,
+                qmin=qmin,
+                device=integer_tensor.device,
+                dtype=integer_tensor.dtype,
+            )
+            dequantized = integer_tensor.to(torch.float32) * scale.to(torch.float32)
+            dequantized = dequantized.to(dtype=tensor.dtype)
+        elif self.collector.storage_mode != "tensor":
+            raise ValueError(f"Unsupported fixed-point storage mode: {self.collector.storage_mode!r}")
         self.collector.stats_for(self.module_name).update(
             tensor=tensor,
             integer_tensor=integer_tensor,
@@ -179,6 +212,8 @@ class FixedPointProbeOutput(nn.Module):
             qmin=qmin,
             qmax=qmax,
             storage_dtype=self.collector.storage_dtype,
+            pack_time_sec=pack_time,
+            unpack_time_sec=unpack_time,
         )
         return dequantized
 
@@ -195,10 +230,12 @@ def apply_fixed_point_probe(model, config: dict):
     if fractional_bits is not None:
         fractional_bits = int(fractional_bits)
     storage_dtype = _storage_dtype_for_bits(num_bits)
+    storage_mode = str(precision_cfg.get("storage_mode", "tensor")).lower()
     collector = FixedPointProbeCollector(
         num_bits=num_bits,
         fractional_bits=fractional_bits,
         storage_dtype=storage_dtype,
+        storage_mode=storage_mode,
     )
 
     for module_name in modules:
@@ -215,6 +252,7 @@ def apply_fixed_point_probe(model, config: dict):
         "activation_quantized_modules": list(modules),
         "fixed_point_bits": num_bits,
         "integer_storage_dtype": str(storage_dtype).replace("torch.", ""),
+        "storage_mode": storage_mode,
     }
     if fractional_bits is not None:
         model._quantization_summary["fixed_point_fractional_bits"] = fractional_bits
@@ -254,6 +292,55 @@ def quantize_to_fixed_point_integer(
     integer_tensor = rounded.to(storage_dtype)
     dequantized = integer_tensor.to(torch.float32) * scale.to(torch.float32)
     return dequantized.to(dtype=tensor.dtype), integer_tensor, scale, qmin, qmax
+
+
+def pack_fixed_point_tensor(
+    integer_tensor: torch.Tensor,
+    num_bits: int,
+    qmin: int,
+) -> tuple[bytes, float]:
+    """Pack a signed fixed-point tensor into a byte string."""
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise ImportError("numpy is required for packed fixed-point storage.") from exc
+
+    start = time.perf_counter()
+    values = integer_tensor.detach().cpu().reshape(-1).numpy().astype(np.int32)
+    unsigned = (values - int(qmin)).astype(np.uint32)
+    bit_positions = np.arange(num_bits, dtype=np.uint32)
+    bits = ((unsigned[:, None] >> bit_positions[None, :]) & 1).astype(np.uint8).reshape(-1)
+    packed = np.packbits(bits, bitorder="little").tobytes()
+    return packed, time.perf_counter() - start
+
+
+def unpack_fixed_point_tensor(
+    packed: bytes,
+    shape: tuple[int, ...],
+    num_bits: int,
+    qmin: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, float]:
+    """Unpack a byte string produced by pack_fixed_point_tensor."""
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise ImportError("numpy is required for packed fixed-point storage.") from exc
+
+    start = time.perf_counter()
+    num_values = 1
+    for dim in shape:
+        num_values *= int(dim)
+    num_bits_total = num_values * num_bits
+    byte_array = np.frombuffer(packed, dtype=np.uint8)
+    bits = np.unpackbits(byte_array, bitorder="little")[:num_bits_total]
+    bit_matrix = bits.reshape(num_values, num_bits).astype(np.uint32)
+    weights = (1 << np.arange(num_bits, dtype=np.uint32))
+    unsigned = (bit_matrix * weights[None, :]).sum(axis=1).astype(np.int32)
+    signed = unsigned + int(qmin)
+    tensor = torch.from_numpy(signed.reshape(shape)).to(device=device, dtype=dtype)
+    return tensor, time.perf_counter() - start
 
 
 def save_fixed_point_probe_report(model, output_dir: str | Path) -> None:
