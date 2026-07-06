@@ -26,6 +26,7 @@ class ModuleProbeStats:
     num_values: int = 0
     original_float_bytes: int = 0
     integer_storage_bytes: int = 0
+    packed_storage_bits: int = 0
     saturated_values: int = 0
     min_float: float | None = None
     max_float: float | None = None
@@ -49,6 +50,7 @@ class ModuleProbeStats:
         self.num_values += numel
         self.original_float_bytes += numel * int(tensor.element_size())
         self.integer_storage_bytes += numel * _dtype_size(storage_dtype)
+        self.packed_storage_bits += numel * (qmax.bit_length() + 1)
 
         if numel == 0:
             return
@@ -74,8 +76,15 @@ class ModuleProbeStats:
             "num_values": self.num_values,
             "original_float_bytes": self.original_float_bytes,
             "integer_storage_bytes": self.integer_storage_bytes,
+            "packed_storage_bits": self.packed_storage_bits,
+            "packed_storage_bytes": self.packed_storage_bits / 8.0,
             "storage_reduction": (
                 1.0 - float(self.integer_storage_bytes) / float(self.original_float_bytes)
+                if self.original_float_bytes
+                else 0.0
+            ),
+            "packed_storage_reduction": (
+                1.0 - (float(self.packed_storage_bits) / 8.0) / float(self.original_float_bytes)
                 if self.original_float_bytes
                 else 0.0
             ),
@@ -110,6 +119,7 @@ class FixedPointProbeCollector:
         total_values = sum(row["num_values"] for row in module_rows)
         total_float_bytes = sum(row["original_float_bytes"] for row in module_rows)
         total_integer_bytes = sum(row["integer_storage_bytes"] for row in module_rows)
+        total_packed_bits = sum(row["packed_storage_bits"] for row in module_rows)
         saturated = sum(row["saturated_values"] for row in module_rows)
         return {
             "probe_method": "fixed_point_activation_probe",
@@ -119,8 +129,15 @@ class FixedPointProbeCollector:
             "total_activation_values": total_values,
             "total_original_float_bytes": total_float_bytes,
             "total_integer_storage_bytes": total_integer_bytes,
+            "total_packed_storage_bits": total_packed_bits,
+            "total_packed_storage_bytes": total_packed_bits / 8.0,
             "total_storage_reduction": (
                 1.0 - float(total_integer_bytes) / float(total_float_bytes)
+                if total_float_bytes
+                else 0.0
+            ),
+            "total_packed_storage_reduction": (
+                1.0 - (float(total_packed_bits) / 8.0) / float(total_float_bytes)
                 if total_float_bytes
                 else 0.0
             ),
