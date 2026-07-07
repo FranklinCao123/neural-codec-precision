@@ -135,10 +135,9 @@ def plot_precision_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: i
 
     axes[0].set_ylabel(r"$\Delta$ bpp (%)")
     axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
-    for ax, label in zip(axes, ["(a)", "(b)"]):
+    for ax in axes:
         ax.set_xticks(x)
         ax.set_xticklabels(x_labels, rotation=28, ha="right")
-        ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -180,10 +179,9 @@ def plot_module_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int)
 
     axes[0].set_ylabel(r"$\Delta$ bpp (%)")
     axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
-    for ax, label in zip(axes, ["(a)", "(b)"]):
+    for ax in axes:
         ax.set_xticks(x)
         ax.set_xticklabels([label for _, label in module_items])
-        ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -220,11 +218,10 @@ def plot_fixed_point_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi:
 
     axes[0].set_ylabel(r"$\Delta$ bpp (%)")
     axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
-    for ax, label in zip(axes, ["(a)", "(b)"]):
+    for ax in axes:
         ax.set_xlabel("Activation bit width")
         ax.set_xticks(x)
         ax.invert_xaxis()
-        ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
     handles, labels = axes[0].get_legend_handles_labels()
