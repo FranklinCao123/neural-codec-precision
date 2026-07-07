@@ -31,6 +31,8 @@ runs/
 outputs/
 results/raw/*
 !results/raw/.gitkeep
+results/analysis/*
+!results/analysis/.gitkeep
 results/figures/*
 !results/figures/.gitkeep
 results/tables/*
