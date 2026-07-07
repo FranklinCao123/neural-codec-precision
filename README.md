@@ -1,36 +1,249 @@
-﻿# LIC Precision Experiments
+# Neural Codec Precision Experiments
 
-This project is a scaffold for precision experiments on learned image compression models.
+This repository contains experiments for studying low-precision inference,
+post-training quantization, and fixed-point activation storage in learned image
+compression models.
 
-Initial target:
+The main goal is to evaluate how different numerical precisions affect:
 
-- Model: Cheng2020 / CompressAI pretrained model
-- Dataset: Kodak first, CLIC later
-- Precisions: FP32 baseline, FP16, INT8 PTQ, INT8 QAT, mixed precision
-- Metrics: bpp, PSNR, MS-SSIM, BD-rate, encode/decode time, model size
+- rate-distortion performance: bpp, PSNR, MS-SSIM
+- runtime behavior: encode/decode time, forward time, CUDA memory
+- model footprint: parameter/state-dict size and simulated quantized weight size
+- stability: invalid reconstructions and non-finite decoded values
+- module sensitivity: encoder, decoder, hyperprior, GDN, residual, and attention blocks
 
-## Workflow
+## Models
 
-1. Run an FP32 baseline.
-2. Add FP16 inference.
-3. Add INT8 post-training quantization.
-4. Add QAT fine-tuning if PTQ loses too much RD performance.
-5. Run module-wise quantization analysis.
-6. Generate tables and rate-distortion curves.
+The current experiments use pretrained CompressAI models:
 
-## Layout
+| Config prefix | CompressAI model | Role |
+| --- | --- | --- |
+| `bmshj2018_hyperprior_*` | `bmshj2018-hyperprior` | CNN hyperprior baseline |
+| `cheng2020_*` | `cheng2020-anchor` | CNN + hyperprior + autoregressive context |
+| `cheng2020_attn_*` | `cheng2020-attn` | Cheng model with attention modules |
+
+All reported experiments currently use Kodak images and `quality=3`, `metric=mse`.
+
+## Experiment Types
+
+The project covers these precision settings:
+
+- `fp32`: full-precision codec baseline
+- `fp16`, `bf16`: low-precision floating-point inference
+- `fp16_weights_*`: module-level FP16 weight experiments
+- `int8_ptq_*`: INT8 weight-only post-training quantization
+- `int8_wa_ptq_calibrated_*`: calibrated INT8 weight + activation PTQ
+- `int{8,10,12,16}_fixed_*`: fixed-point activation quantize-store-dequantize experiments
+- `mixed_*`: mixed-precision module policies
+- `fp8_fake_*`, `int*_fake_*`: exploratory fake-quantization experiments
+
+Important scope note: INT/fixed-point experiments preserve the CompressAI entropy
+coder and probability table machinery in floating point where needed. This keeps
+full `compress()` / `decompress()` evaluation valid while isolating neural-module
+precision effects.
+
+## Repository Layout
 
 ```text
-configs/        Experiment configs.
-data/           Local datasets, ignored by git.
-models/         Model loading and wrappers.
-quantization/   FP16, PTQ, QAT, fixed-point utilities.
-evaluation/     Metrics, codec evaluation, BD-rate, benchmark code.
-scripts/        Command-line entry points.
-results/        Generated tables and figures, ignored by git except placeholders.
+configs/        YAML experiment configs.
+data/           Local datasets. Ignored by git.
 docs/           Notes and experiment plans.
+evaluation/     Codec evaluation, metrics, timing, and size utilities.
+models/         CompressAI model loading and wrappers.
+quantization/   FP16, PTQ, calibrated INT8, QAT, and fixed-point utilities.
+scripts/        Command-line entry points.
+results/        Generated experiment outputs. Ignored by git except placeholders.
 ```
 
-## Next Step
+## Setup
 
-Install PyTorch, CompressAI, and metric dependencies, then implement the FP32 Cheng2020 baseline script.
+Install the main dependencies on the server:
+
+```bash
+pip install compressai pytorch-msssim pyyaml pillow numpy
+```
+
+Install PyTorch according to the CUDA version of the server before running the
+experiments.
+
+Expected dataset layout:
+
+```text
+data/kodak/
+  kodim01.png
+  ...
+  kodim24.png
+```
+
+For visualization-only runs:
+
+```bash
+mkdir -p data/kodak_viz
+cp data/kodak/kodim01.png data/kodak_viz/
+cp data/kodak/kodim19.png data/kodak_viz/
+```
+
+## Common Commands
+
+Run a baseline:
+
+```bash
+python scripts/run_fp32_baseline.py --config configs/cheng2020_fp32.yaml --device cuda
+```
+
+Run FP16 and BF16:
+
+```bash
+python scripts/run_fp16.py --config configs/cheng2020_fp16.yaml --device cuda
+python scripts/run_bf16.py --config configs/cheng2020_bf16.yaml --device cuda
+```
+
+Run INT8 weight-only PTQ:
+
+```bash
+python scripts/run_int8_ptq.py --config configs/cheng2020_int8_ptq_transforms.yaml --device cuda
+```
+
+Run calibrated INT8 weight + activation PTQ:
+
+```bash
+python scripts/run_int8_calibrated_ptq.py \
+  --config configs/cheng2020_int8_wa_ptq_calibrated.yaml \
+  --device cuda
+```
+
+Run fixed-point activation codec experiments:
+
+```bash
+python scripts/run_fixed_point_codec.py --config configs/cheng2020_int16_fixed_tensor.yaml --device cuda
+python scripts/run_fixed_point_codec.py --config configs/cheng2020_int12_fixed_packed.yaml --device cuda
+python scripts/run_fixed_point_codec.py --config configs/cheng2020_int10_fixed_packed.yaml --device cuda
+python scripts/run_fixed_point_codec.py --config configs/cheng2020_int8_fixed_packed.yaml --device cuda
+```
+
+## Recommended Experiment Matrix
+
+For each main model, the core set is:
+
+```text
+FP32
+FP16
+BF16
+INT8 weight-only PTQ
+INT8 weight + activation calibrated PTQ
+INT16 fixed-point
+INT12 fixed-point
+INT10 fixed-point
+INT8 fixed-point when stable or useful
+```
+
+Module-wise INT8 W+A PTQ ablations use configs such as:
+
+```text
+*_int8_wa_ptq_calibrated_ga.yaml
+*_int8_wa_ptq_calibrated_gs.yaml
+*_int8_wa_ptq_calibrated_hyper.yaml
+*_int8_wa_ptq_calibrated_gs_hyper.yaml
+```
+
+These experiments help separate rate sensitivity from reconstruction sensitivity:
+
+- `g_a`: analysis transform / encoder; often affects latent distribution and bpp
+- `g_s`: synthesis transform / decoder; often affects PSNR/MS-SSIM
+- `h_a`, `h_s`: hyperprior path; affects entropy-parameter prediction and bpp
+
+## Module Precision Analysis
+
+Use this script to collect activation statistics and quantization error by
+module type and top-level path:
+
+```bash
+python scripts/analyze_module_precision.py \
+  --config configs/cheng2020_attn_fp32.yaml \
+  --device cuda \
+  --num-images 4 \
+  --output-dir results/analysis/cheng2020_attn
+```
+
+Outputs:
+
+```text
+modules.json
+activation_stats.csv
+quant_error.csv
+summary_by_type.csv
+summary_by_type_bits.csv
+summary_by_top_level.csv
+summary_by_top_level_bits.csv
+worst_int8_layers.csv
+```
+
+The per-bit summaries are the main files for comparing Conv, GDN, residual, and
+attention sensitivity.
+
+## Visualization
+
+Visualization runs save reconstructions for a small Kodak subset:
+
+```bash
+python scripts/run_fp32_baseline.py --config configs/viz_cheng2020_attn_fp32.yaml --device cuda
+python scripts/run_fp16.py --config configs/viz_cheng2020_attn_fp16.yaml --device cuda
+python scripts/run_fixed_point_codec.py --config configs/viz_cheng2020_attn_int12_fixed_packed.yaml --device cuda
+python scripts/run_int8_calibrated_ptq.py --config configs/viz_cheng2020_attn_int8_wa_ptq_calibrated.yaml --device cuda
+```
+
+Create a cropped comparison figure:
+
+```bash
+python scripts/make_visual_comparison.py \
+  --item Original=data/kodak_viz/kodim01.png \
+  --item FP32=results/visualizations/cheng2020_attn_fp32/reconstructions/kodim01.png \
+  --item FP16=results/visualizations/cheng2020_attn_fp16/reconstructions/kodim01.png \
+  --item INT12=results/visualizations/cheng2020_attn_int12_fixed_packed/reconstructions/kodim01.png \
+  --item INT8=results/visualizations/cheng2020_attn_int8_wa_ptq_calibrated/reconstructions/kodim01.png \
+  --crop 250,150,160,160 \
+  --output results/visualizations/figures/kodim01_cheng2020_attn_crop.png
+```
+
+## Result Summaries
+
+After downloading or generating `results/raw/*/results.json`, summarize all
+experiments with:
+
+```bash
+python scripts/summarize_results.py --input results/raw --output results/tables
+```
+
+Generated tables:
+
+```text
+results/tables/all_results.csv
+results/tables/main_codec_summary.csv
+results/tables/invalid_cases.csv
+```
+
+Useful checks:
+
+```bash
+find results/raw -maxdepth 2 -name results.json | sort
+find results/analysis -maxdepth 2 -type f | sort
+find results/visualizations -type f | sort
+cat results/tables/invalid_cases.csv
+```
+
+## Git Policy
+
+Generated data and experiment outputs are ignored:
+
+```text
+data/*
+checkpoints/*
+results/raw/*
+results/analysis/*
+results/visualizations/*
+results/tables/*
+```
+
+Commit code, configs, docs, and scripts. Do not commit datasets, pretrained
+weights, raw experiment outputs, generated CSV summaries, or visualization
+figures unless explicitly needed for a release or report artifact.
