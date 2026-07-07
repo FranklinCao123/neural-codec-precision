@@ -1,0 +1,33 @@
+experiment:
+  name: viz_cheng2020_attn_fp16
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-attn
+  quality: 3
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak_viz
+  root: data/kodak_viz
+  batch_size: 1
+  num_workers: 0
+
+precision:
+  mode: fp16
+  keep_entropy_model_fp32: true
+
+evaluation:
+  metrics:
+    - bpp
+    - psnr
+    - ms_ssim
+  codec_precision: fp16
+  benchmark_forward: false
+  benchmark_memory: true
+  save_reconstructions: true
+
+output:
+  dir: results/visualizations/cheng2020_attn_fp16

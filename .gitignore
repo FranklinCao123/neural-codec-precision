@@ -33,6 +33,8 @@ results/raw/*
 !results/raw/.gitkeep
 results/analysis/*
 !results/analysis/.gitkeep
+results/visualizations/*
+!results/visualizations/.gitkeep
 results/figures/*
 !results/figures/.gitkeep
 results/tables/*
