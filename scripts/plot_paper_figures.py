@@ -92,6 +92,19 @@ def set_zero_line(ax) -> None:
     ax.spines["right"].set_visible(False)
 
 
+def add_shared_legend(fig, handles, labels, ncol: int = 3) -> None:
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=ncol,
+        frameon=False,
+        handlelength=1.8,
+        columnspacing=1.4,
+    )
+
+
 def plot_precision_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
     import matplotlib.pyplot as plt
 
@@ -128,8 +141,9 @@ def plot_precision_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: i
         ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
-    axes[0].legend(frameon=False, loc="upper left")
-    fig.tight_layout(w_pad=1.5)
+    handles, labels = axes[0].get_legend_handles_labels()
+    add_shared_legend(fig, handles, labels)
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
     save_figure(fig, out_dir, "fig_precision_sensitivity", dpi)
     plt.close(fig)
 
@@ -164,18 +178,6 @@ def plot_module_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int)
         valid_psnr = [yy for yy in psnr if math.isfinite(yy)]
         axes[1].bar(valid_xs, valid_psnr, width=width, color=color, label=MODEL_LABEL[model], alpha=0.9)
 
-        invalid_xs = [xx for xx, yy in zip(xs, psnr) if not math.isfinite(yy)]
-        if invalid_xs:
-            axes[1].scatter(
-                invalid_xs,
-                [0.0] * len(invalid_xs),
-                marker="x",
-                s=28,
-                color=color,
-                linewidths=1.1,
-                zorder=5,
-            )
-
     axes[0].set_ylabel(r"$\Delta$ bpp (%)")
     axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
     for ax, label in zip(axes, ["(a)", "(b)"]):
@@ -184,8 +186,9 @@ def plot_module_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int)
         ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
-    axes[0].legend(frameon=False, loc="upper left", ncol=1)
-    fig.tight_layout(w_pad=1.5)
+    handles, labels = axes[0].get_legend_handles_labels()
+    add_shared_legend(fig, handles, labels)
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
     save_figure(fig, out_dir, "fig_module_sensitivity", dpi)
     plt.close(fig)
 
@@ -224,8 +227,9 @@ def plot_fixed_point_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi:
         ax.text(0.02, 0.95, label, transform=ax.transAxes, va="top", ha="left")
         set_zero_line(ax)
 
-    axes[0].legend(frameon=False, loc="upper left")
-    fig.tight_layout(w_pad=1.5)
+    handles, labels = axes[0].get_legend_handles_labels()
+    add_shared_legend(fig, handles, labels)
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
     save_figure(fig, out_dir, "fig_fixed_point_sensitivity", dpi)
     plt.close(fig)
 
