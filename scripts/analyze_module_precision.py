@@ -300,6 +300,36 @@ def _summarize_numeric(rows: list[dict[str, Any]], group_key: str, metric_keys: 
     return summary_rows
 
 
+def _summarize_numeric_by_keys(
+    rows: list[dict[str, Any]],
+    group_keys: list[str],
+    metric_keys: list[str],
+) -> list[dict[str, Any]]:
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[tuple(row[key] for key in group_keys)].append(row)
+
+    summary_rows = []
+    for group, group_rows in sorted(grouped.items()):
+        summary = {
+            key: value
+            for key, value in zip(group_keys, group, strict=True)
+        }
+        summary.update(
+            {
+                "num_modules": len(group_rows),
+                "total_values": int(sum(int(row.get("num_values", 0)) for row in group_rows)),
+            }
+        )
+        for key in metric_keys:
+            values = [float(row[key]) for row in group_rows if key in row and row[key] != ""]
+            if values:
+                summary[f"mean_{key}"] = sum(values) / len(values)
+                summary[f"max_{key}"] = max(values)
+        summary_rows.append(summary)
+    return summary_rows
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="Path to an FP32 model config.")
@@ -436,6 +466,30 @@ def main() -> None:
             group_key="top_level",
             metric_keys=["relative_mse", "sqnr_db", "cosine_similarity", "saturation_ratio"],
         ),
+    )
+    _write_csv(
+        output_dir / "summary_by_type_bits.csv",
+        _summarize_numeric_by_keys(
+            quant_rows,
+            group_keys=["bits", "module_type"],
+            metric_keys=["relative_mse", "sqnr_db", "cosine_similarity", "saturation_ratio"],
+        ),
+    )
+    _write_csv(
+        output_dir / "summary_by_top_level_bits.csv",
+        _summarize_numeric_by_keys(
+            quant_rows,
+            group_keys=["bits", "top_level"],
+            metric_keys=["relative_mse", "sqnr_db", "cosine_similarity", "saturation_ratio"],
+        ),
+    )
+    _write_csv(
+        output_dir / "worst_int8_layers.csv",
+        sorted(
+            (row for row in quant_rows if int(row["bits"]) == 8),
+            key=lambda row: float(row["relative_mse"]),
+            reverse=True,
+        )[:30],
     )
 
     print(f"Saved module precision analysis to: {output_dir}")
