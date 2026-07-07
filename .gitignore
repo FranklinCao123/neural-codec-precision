@@ -49,3 +49,6 @@ results/tables/*
 # Logs
 *.log
 logs/
+
+# Local Overleaf/paper workspace
+paper/
