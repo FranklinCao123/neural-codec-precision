@@ -171,7 +171,9 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
         decode_time = time.perf_counter() - start
 
         x_hat = _crop_to_shape(decompressed["x_hat"], original_shape)
-        x_hat = x_hat.float().clamp(0.0, 1.0)
+        x_hat = x_hat.float()
+        x_hat_nonfinite_values = int((~torch.isfinite(x_hat)).sum().item())
+        x_hat = x_hat.clamp(0.0, 1.0)
 
         row = {
             "name": name,
@@ -181,7 +183,9 @@ def evaluate_codec(model, dataloader, config: dict, device: str | torch.device =
             "bpp": compute_bpp(num_bits, height, width),
             "encode_time_sec": encode_time,
             "decode_time_sec": decode_time,
+            "x_hat_nonfinite_values": x_hat_nonfinite_values,
         }
+        row["x_hat_is_finite"] = x_hat_nonfinite_values == 0
         row["compression_ratio_rgb8"] = compression_ratio_from_bpp(row["bpp"])
         if benchmark_forward:
             row["forward_time_sec"] = _measure_forward_time(
@@ -276,6 +280,12 @@ def _summarize(
         "avg_forward_time_sec": mean("forward_time_sec"),
         "avg_compression_ratio_rgb8": mean("compression_ratio_rgb8"),
         "total_bits": int(sum(row["num_bits"] for row in rows)),
+        "num_invalid_reconstructions": int(
+            sum(1 for row in rows if not row.get("x_hat_is_finite", True))
+        ),
+        "total_x_hat_nonfinite_values": int(
+            sum(row.get("x_hat_nonfinite_values", 0) for row in rows)
+        ),
     }
     summary.update(model_size_summary(model))
     if hasattr(model, "_quantization_summary"):
