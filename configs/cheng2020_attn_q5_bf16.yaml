@@ -1,0 +1,36 @@
+experiment:
+  name: cheng2020_attn_q5_bf16_inference
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-attn
+  quality: 5
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak
+  root: data/kodak
+  batch_size: 1
+  num_workers: 0
+
+precision:
+  mode: bf16
+  keep_entropy_model_fp32: true
+
+evaluation:
+  metrics:
+    - bpp
+    - psnr
+    - ms_ssim
+  codec_precision: bf16
+  benchmark_forward: true
+  benchmark_memory: true
+  forward_precision: bf16
+  forward_warmup: 1
+  forward_repeats: 3
+  save_reconstructions: false
+
+output:
+  dir: results/raw/cheng2020_attn_q5_bf16
