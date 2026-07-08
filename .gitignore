@@ -27,8 +27,6 @@ datasets/
 checkpoints/*
 !checkpoints/.gitkeep
 pretrained/
-external/
-external_models/
 runs/
 outputs/
 results/raw/*
