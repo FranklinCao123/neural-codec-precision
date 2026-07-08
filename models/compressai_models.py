@@ -36,6 +36,8 @@ def load_model_from_config(config: dict):
         "cheng2020-attn": "cheng2020_attn",
         "bmshj2018-factorized": "bmshj2018_factorized",
         "bmshj2018-hyperprior": "bmshj2018_hyperprior",
+        "minnen2018": "mbt2018",
+        "minnen2018-mean": "mbt2018_mean",
         "mbt2018-mean": "mbt2018_mean",
         "mbt2018": "mbt2018",
     }
@@ -45,6 +47,12 @@ def load_model_from_config(config: dict):
         if hasattr(zoo, attr_name)
     }
     if name not in constructors:
+        if name in {"elic", "tcm", "lic-tcm"}:
+            raise ValueError(
+                f"Model {name!r} is not available through the current CompressAI "
+                "zoo loader. Add an external model adapter before running this "
+                "experiment."
+            )
         supported = ", ".join(sorted(constructors))
         raise ValueError(f"Unsupported CompressAI model {name!r}. Supported: {supported}")
 
