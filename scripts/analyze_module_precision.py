@@ -314,12 +314,9 @@ def _quantile(values: torch.Tensor, q: float, max_values: int = 1_000_000) -> fl
         # torch.quantile has backend limits for very large tensors. A deterministic
         # uniform subsample is sufficient here because these quantiles are diagnostic
         # distribution summaries, not values used by the codec.
-        indices = torch.linspace(
-            0,
-            values.numel() - 1,
-            steps=max_values,
-            device=values.device,
-        ).long()
+        indices = torch.arange(max_values, device=values.device, dtype=torch.long)
+        indices = indices * (values.numel() - 1) // (max_values - 1)
+        indices = indices.clamp_(0, values.numel() - 1)
         values = values[indices]
     return float(torch.quantile(values, q).item())
 
