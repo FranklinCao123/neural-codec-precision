@@ -44,10 +44,12 @@ def apply_activation_fake_quant(model, config: dict):
     elif _is_fixed_point_dtype(fake_dtype):
         num_bits = _fixed_point_bits(fake_dtype, precision_cfg)
         fractional_bits = precision_cfg.get("fractional_bits")
+        percentile = precision_cfg.get("percentile")
         quantize_fn = lambda tensor: fake_fixed_point(
             tensor,
             num_bits=num_bits,
             fractional_bits=fractional_bits,
+            percentile=percentile,
         )
         method = f"int{num_bits}_activation_fixed_point_fake_quant"
     elif fake_dtype in {"fp8", "fp8_e4m3", "e4m3"}:
@@ -81,6 +83,10 @@ def apply_activation_fake_quant(model, config: dict):
         if precision_cfg.get("fractional_bits") is not None:
             model._quantization_summary["fixed_point_fractional_bits"] = int(
                 precision_cfg["fractional_bits"]
+            )
+        if precision_cfg.get("percentile") is not None:
+            model._quantization_summary["activation_scale_percentile"] = float(
+                precision_cfg["percentile"]
             )
     return model
 
@@ -135,6 +141,7 @@ def fake_fixed_point(
     tensor: torch.Tensor,
     num_bits: int,
     fractional_bits: int | None = None,
+    percentile: float | None = None,
 ) -> torch.Tensor:
     """Symmetric signed fixed-point fake quantization."""
     if tensor.numel() == 0:
@@ -142,8 +149,15 @@ def fake_fixed_point(
     qmax = (1 << (num_bits - 1)) - 1
     qmin = -(1 << (num_bits - 1))
     if fractional_bits is None:
-        max_abs = tensor.detach().abs().max()
-        scale = torch.clamp(max_abs / float(qmax), min=torch.finfo(tensor.dtype).eps)
+        abs_values = tensor.detach().abs()
+        if percentile is None:
+            range_abs = abs_values.max()
+        else:
+            percentile = float(percentile)
+            if not 0.0 < percentile <= 100.0:
+                raise ValueError("percentile must be in the interval (0, 100].")
+            range_abs = torch.quantile(abs_values.float(), percentile / 100.0).to(tensor.dtype)
+        scale = torch.clamp(range_abs / float(qmax), min=torch.finfo(tensor.dtype).eps)
     else:
         scale = torch.tensor(
             2.0 ** (-int(fractional_bits)),
