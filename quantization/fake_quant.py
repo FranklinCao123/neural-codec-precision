@@ -61,12 +61,10 @@ def apply_activation_fake_quant(model, config: dict):
 
     stats: list[FakeQuantStats] = []
     for module_name in modules:
-        if not hasattr(model, module_name):
-            raise ValueError(f"Model does not have module {module_name!r}")
-        module = getattr(model, module_name)
+        module = _get_submodule(model, module_name)
         if isinstance(module, FakeQuantOutput):
             module = module.module
-        setattr(model, module_name, FakeQuantOutput(module, quantize_fn))
+        _set_submodule(model, module_name, FakeQuantOutput(module, quantize_fn))
         stats.append(FakeQuantStats(module=module_name, dtype=fake_dtype))
 
     model._quantization_summary = {
@@ -85,6 +83,21 @@ def apply_activation_fake_quant(model, config: dict):
                 precision_cfg["fractional_bits"]
             )
     return model
+
+
+def _get_submodule(model: nn.Module, path: str) -> nn.Module:
+    try:
+        return model.get_submodule(path)
+    except AttributeError as exc:
+        raise ValueError(f"Model does not have module {path!r}") from exc
+
+
+def _set_submodule(model: nn.Module, path: str, module: nn.Module) -> None:
+    parent_path, separator, child_name = path.rpartition(".")
+    parent = model.get_submodule(parent_path) if separator else model
+    if child_name not in parent._modules:
+        raise ValueError(f"Model does not have module {path!r}")
+    parent._modules[child_name] = module
 
 
 def fake_bf16(tensor: torch.Tensor) -> torch.Tensor:

@@ -1,0 +1,33 @@
+experiment:
+  name: cheng2020_attn_q3_int8_module_ga7_conv
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-attn
+  quality: 3
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak
+  root: data/kodak
+  batch_size: 1
+  num_workers: 0
+
+precision:
+  mode: int8_module_output_fake
+  fake_dtype: int8
+  activation_modules:
+    - g_a.7
+
+evaluation:
+  metrics: [bpp, psnr, ms_ssim]
+  benchmark_forward: true
+  benchmark_memory: true
+  forward_warmup: 1
+  forward_repeats: 3
+  save_reconstructions: false
+
+output:
+  dir: results/raw/cheng2020_attn_q3_int8_module_ga7_conv
