@@ -343,6 +343,13 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def _row_num_values(row: dict[str, Any]) -> int:
+    for key in ("num_values", "num_output_values", "num_input_values"):
+        if key in row:
+            return int(row[key])
+    return 0
+
+
 def _summarize_numeric(rows: list[dict[str, Any]], group_key: str, metric_keys: list[str]) -> list[dict[str, Any]]:
     grouped = defaultdict(list)
     for row in rows:
@@ -353,7 +360,7 @@ def _summarize_numeric(rows: list[dict[str, Any]], group_key: str, metric_keys: 
         summary = {
             group_key: group,
             "num_modules": len(group_rows),
-            "total_values": int(sum(int(row.get("num_values", 0)) for row in group_rows)),
+            "total_values": sum(_row_num_values(row) for row in group_rows),
         }
         for key in metric_keys:
             values = [float(row[key]) for row in group_rows if key in row and row[key] != ""]
@@ -382,7 +389,7 @@ def _summarize_numeric_by_keys(
         summary.update(
             {
                 "num_modules": len(group_rows),
-                "total_values": int(sum(int(row.get("num_values", 0)) for row in group_rows)),
+                "total_values": sum(_row_num_values(row) for row in group_rows),
             }
         )
         for key in metric_keys:
