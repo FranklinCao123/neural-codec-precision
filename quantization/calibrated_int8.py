@@ -109,6 +109,7 @@ def apply_calibrated_int8_ptq(model, config: dict, dataloader, device: torch.dev
         "weight_quantization": precision_cfg.get("weight_quantization", "per_channel"),
         "activation_quantization": "calibrated_symmetric_per_tensor",
         "activation_calibration_path": "compress_decompress_after_weight_quantization",
+        "calibration_root": str(calibration_cfg.get("root", "")),
         "calibration_num_images": max_images,
         "activation_observers": [observers[name].as_dict() for name in modules],
         "num_quantized_tensors": len(weight_stats),

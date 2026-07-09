@@ -53,6 +53,19 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Device to run on: auto, cpu, cuda, cuda:0, etc.",
     )
+    parser.add_argument(
+        "--calibration-root",
+        help="Independent image directory used only for activation calibration.",
+    )
+    parser.add_argument(
+        "--calibration-num-images",
+        type=int,
+        help="Maximum number of calibration images.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        help="Result directory relative to the project root, or an absolute path.",
+    )
     return parser.parse_args()
 
 
@@ -63,6 +76,17 @@ def main() -> None:
         config_path = PROJECT_ROOT / config_path
 
     config = _load_yaml(config_path)
+    calibration_cfg = dict(config.get("calibration", {}))
+    if args.calibration_root is not None:
+        calibration_cfg["root"] = args.calibration_root
+    if args.calibration_num_images is not None:
+        calibration_cfg["num_images"] = args.calibration_num_images
+    config["calibration"] = calibration_cfg
+    if args.output_dir is not None:
+        output_cfg = dict(config.get("output", {}))
+        output_cfg["dir"] = args.output_dir
+        config["output"] = output_cfg
+
     _set_seed(int(config.get("experiment", {}).get("seed", 1234)))
 
     device = _select_device(args.device)
@@ -72,10 +96,12 @@ def main() -> None:
     dataloader = build_image_dataloader(config)
 
     results = evaluate_codec(model, dataloader, config, device=device)
-    output_dir = PROJECT_ROOT / config.get("output", {}).get(
+    output_dir = Path(config.get("output", {}).get(
         "dir",
         "results/raw/cheng2020_int8_wa_ptq_calibrated",
-    )
+    ))
+    if not output_dir.is_absolute():
+        output_dir = PROJECT_ROOT / output_dir
     save_results(results, output_dir)
 
     summary = results["summary"]
