@@ -91,6 +91,8 @@ class ActivationStats:
             "avg_p999_abs": avg_p999_abs,
             "max_p999_abs": self.max_p999_abs,
             "p999_to_max_abs": avg_p999_abs / max(max_abs, 1e-12),
+            "max_abs_to_avg_p99": max_abs / max(self.sum_p99_abs / max(self.calls, 1), 1e-12),
+            "max_abs_to_avg_p999": max_abs / max(avg_p999_abs, 1e-12),
             "int8_dynamic_scale": max_abs / 127.0 if max_abs > 0 else 1.0,
         }
 
@@ -150,6 +152,54 @@ class QuantErrorStats:
             "max_scale": self.max_scale,
             "saturated_values": self.saturated_values,
             "saturation_ratio": self.saturated_values / max(self.num_values, 1),
+        }
+
+
+class ErrorAmplificationStats:
+    def __init__(self, bits: int) -> None:
+        self.bits = bits
+        self.calls = 0
+        self.num_input_values = 0
+        self.num_output_values = 0
+        self.input_error = 0.0
+        self.input_signal = 0.0
+        self.output_error = 0.0
+        self.output_signal = 0.0
+
+    def update(
+        self,
+        input_tensor: torch.Tensor,
+        quantized_input: torch.Tensor,
+        output: torch.Tensor,
+        perturbed_output: torch.Tensor,
+    ) -> None:
+        input_values = input_tensor.detach().float()
+        quantized_values = quantized_input.detach().float()
+        output_values = output.detach().float()
+        perturbed_values = perturbed_output.detach().float()
+        if input_values.shape != quantized_values.shape or output_values.shape != perturbed_values.shape:
+            return
+
+        self.calls += 1
+        self.num_input_values += int(input_values.numel())
+        self.num_output_values += int(output_values.numel())
+        self.input_error += float(((quantized_values - input_values) ** 2).sum().item())
+        self.input_signal += float((input_values**2).sum().item())
+        self.output_error += float(((perturbed_values - output_values) ** 2).sum().item())
+        self.output_signal += float((output_values**2).sum().item())
+
+    def to_row(self, module: dict[str, str]) -> dict[str, Any]:
+        input_relative_mse = self.input_error / max(self.input_signal, 1e-30)
+        output_relative_mse = self.output_error / max(self.output_signal, 1e-30)
+        return {
+            **module,
+            "bits": self.bits,
+            "calls": self.calls,
+            "num_input_values": self.num_input_values,
+            "num_output_values": self.num_output_values,
+            "input_relative_mse": input_relative_mse,
+            "output_relative_mse": output_relative_mse,
+            "error_amplification": output_relative_mse / max(input_relative_mse, 1e-30),
         }
 
 
@@ -241,6 +291,20 @@ def _first_tensor(output: Any) -> torch.Tensor | None:
             if tensor is not None:
                 return tensor
     return None
+
+
+def _quantize_first_floating_tensor(
+    values: tuple[Any, ...],
+    bits: int,
+) -> tuple[tuple[Any, ...], torch.Tensor | None, torch.Tensor | None]:
+    items = list(values)
+    for index, value in enumerate(items):
+        if torch.is_tensor(value) and torch.is_floating_point(value):
+            dequantized, _, _, _, _ = _fake_quantize(value.detach().float(), bits)
+            dequantized = dequantized.to(device=value.device, dtype=value.dtype)
+            items[index] = dequantized
+            return tuple(items), value, dequantized
+    return values, None, None
 
 
 def _quantile(values: torch.Tensor, q: float) -> float:
@@ -352,6 +416,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also analyze selected module types outside g_a/g_s/h_a/h_s.",
     )
+    parser.add_argument(
+        "--amplification-bits",
+        type=int,
+        default=8,
+        help="Bit width used to probe module input-error amplification; use 0 to disable.",
+    )
     return parser.parse_args()
 
 
@@ -386,17 +456,48 @@ def main() -> None:
         item["name"]: {bits: QuantErrorStats(bits) for bits in args.bits}
         for item in modules
     }
+    amplification_stats = {
+        item["name"]: ErrorAmplificationStats(args.amplification_bits)
+        for item in modules
+    }
+    probing_amplification = False
 
     hooks = []
 
     def make_hook(name: str):
-        def hook(_module, _inputs, output):
+        def hook(module, inputs, output):
+            nonlocal probing_amplification
+            if probing_amplification:
+                return
             tensor = _first_tensor(output)
             if tensor is None or not torch.is_floating_point(tensor):
                 return
             activation_stats[name].update(tensor)
             for stats in quant_stats[name].values():
                 stats.update(tensor)
+            if args.amplification_bits <= 0:
+                return
+
+            quantized_inputs, input_tensor, quantized_input = _quantize_first_floating_tensor(
+                inputs,
+                args.amplification_bits,
+            )
+            if input_tensor is None or quantized_input is None:
+                return
+            try:
+                probing_amplification = True
+                perturbed_output = module(*quantized_inputs)
+            finally:
+                probing_amplification = False
+            perturbed_tensor = _first_tensor(perturbed_output)
+            if perturbed_tensor is None or not torch.is_floating_point(perturbed_tensor):
+                return
+            amplification_stats[name].update(
+                input_tensor,
+                quantized_input,
+                tensor,
+                perturbed_tensor,
+            )
 
         return hook
 
@@ -438,6 +539,11 @@ def main() -> None:
         for bits in sorted(quant_stats[name])
         if quant_stats[name][bits].calls > 0
     ]
+    amplification_rows = [
+        amplification_stats[name].to_row(module_by_name[name])
+        for name in sorted(module_by_name)
+        if amplification_stats[name].calls > 0
+    ]
 
     _write_json(
         output_dir / "modules.json",
@@ -446,11 +552,21 @@ def main() -> None:
             "model": config.get("model", {}),
             "num_images": num_images,
             "bits": args.bits,
+            "amplification_bits": args.amplification_bits,
             "modules": module_rows,
         },
     )
     _write_csv(output_dir / "activation_stats.csv", activation_rows)
     _write_csv(output_dir / "quant_error.csv", quant_rows)
+    _write_csv(output_dir / "error_amplification.csv", amplification_rows)
+    _write_csv(
+        output_dir / "error_amplification_by_type.csv",
+        _summarize_numeric(
+            amplification_rows,
+            group_key="module_type",
+            metric_keys=["input_relative_mse", "output_relative_mse", "error_amplification"],
+        ),
+    )
     _write_csv(
         output_dir / "summary_by_type.csv",
         _summarize_numeric(
