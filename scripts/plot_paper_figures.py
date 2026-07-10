@@ -260,63 +260,6 @@ def plot_layer_ablation(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> 
     plt.close(fig)
 
 
-def plot_fixed_storage(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
-    import matplotlib.pyplot as plt
-
-    rows = [
-        row
-        for row in rows
-        if row.get("model") in {"cheng2020-anchor", "cheng2020-attn"}
-        and row.get("quality") == "3"
-        and row.get("precision") in {"int16_fixed_tensor", "int12_fixed_packed", "int10_fixed_packed", "int8_fixed_packed"}
-    ]
-    if not rows:
-        return
-    table = grouped(rows, "model", "precision")
-    bits = [16, 12, 10, 8]
-    precision_for_bit = {
-        16: "int16_fixed_tensor",
-        12: "int12_fixed_packed",
-        10: "int10_fixed_packed",
-        8: "int8_fixed_packed",
-    }
-    models = ["cheng2020-anchor", "cheng2020-attn"]
-    colors = {"cheng2020-anchor": "#d62728", "cheng2020-attn": "#2ca02c"}
-
-    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.65), sharex=True)
-
-    for model in models:
-        psnr = [f(table.get((model, precision_for_bit[bit])), "psnr_delta") for bit in bits]
-        storage = [
-            f(table.get((model, precision_for_bit[bit])), "packed_storage_reduction") * 100.0
-            for bit in bits
-        ]
-        axes[0].plot(bits, psnr, marker="o", color=colors[model], label=MODEL_LABEL[model])
-        axes[1].plot(bits, storage, marker="s", color=colors[model], label=MODEL_LABEL[model])
-
-    axes[0].set_ylabel(r"$\Delta$ PSNR (dB)")
-    axes[1].set_ylabel("Activation storage reduction (%)")
-    for ax in axes:
-        ax.set_xlabel("Activation bit width")
-        ax.set_xticks(bits)
-        ax.invert_xaxis()
-        clean_axis(ax, zero_line=ax is axes[0])
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.04),
-        ncol=2,
-        frameon=False,
-        columnspacing=1.4,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.4)
-    save_figure(fig, out_dir, "fig_fixed_point_storage_tradeoff", dpi)
-    plt.close(fig)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tables", type=Path, default=Path("results/tables"), help="Input CSV table directory.")
@@ -328,12 +271,10 @@ def main() -> None:
     quality_rows = read_rows(args.tables / "paper_quality_trends.csv")
     module_rows = read_rows(args.tables / "paper_module_type_sensitivity.csv")
     layer_rows = read_rows(args.tables / "paper_layer_ablation.csv")
-    storage_rows = read_rows(args.tables / "paper_fixed_storage.csv")
 
     plot_quality_trends(quality_rows, args.out_dir, args.dpi)
     plot_module_type_sensitivity(module_rows, args.out_dir, args.dpi)
     plot_layer_ablation(layer_rows, args.out_dir, args.dpi)
-    plot_fixed_storage(storage_rows, args.out_dir, args.dpi)
 
     print(f"Saved figures to: {args.out_dir}")
     for path in sorted(args.out_dir.glob("fig_*.*")):

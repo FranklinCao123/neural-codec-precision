@@ -316,6 +316,31 @@ def _paper_storage_rows(rows: list[dict[str, Any]], raw_dir: Path) -> list[dict[
     return sorted(output, key=_model_sort_key)
 
 
+def _paper_storage_compact_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for row in rows:
+        compact.append(
+            {
+                "model": row.get("model"),
+                "quality": row.get("quality"),
+                "precision_label": row.get("precision_label"),
+                "fixed_point_bits": row.get("fixed_point_bits"),
+                "storage_mode": row.get("storage_mode"),
+                "avg_bpp": row.get("avg_bpp"),
+                "bpp_delta_pct": row.get("bpp_delta_pct"),
+                "avg_psnr": row.get("avg_psnr"),
+                "psnr_delta": row.get("psnr_delta"),
+                "avg_ms_ssim": row.get("avg_ms_ssim"),
+                "tensor_storage_reduction": row.get("tensor_storage_reduction"),
+                "packed_storage_reduction": row.get("packed_storage_reduction"),
+                "total_saturation_ratio": row.get("total_saturation_ratio"),
+                "total_pack_time_sec": row.get("total_pack_time_sec"),
+                "total_unpack_time_sec": row.get("total_unpack_time_sec"),
+            }
+        )
+    return compact
+
+
 def _quality_from_analysis_dir(name: str) -> int | None:
     match = re.search(r"_q([135])$", name)
     if match:
@@ -379,6 +404,7 @@ def main() -> None:
     quality_rows = _paper_quality_rows(main_rows)
     layer_rows = _paper_layer_ablation_rows(rows)
     storage_rows = _paper_storage_rows(rows, input_dir)
+    storage_compact_rows = _paper_storage_compact_rows(storage_rows)
     module_type_rows = _paper_module_type_rows(analysis_dir)
 
     _write_csv(output_dir / "all_results.csv", rows, CORE_COLUMNS)
@@ -392,6 +418,27 @@ def main() -> None:
         storage_rows,
         CORE_COLUMNS
         + [
+            "tensor_storage_reduction",
+            "packed_storage_reduction",
+            "total_saturation_ratio",
+            "total_pack_time_sec",
+            "total_unpack_time_sec",
+        ],
+    )
+    _write_csv(
+        output_dir / "paper_fixed_storage_compact.csv",
+        storage_compact_rows,
+        [
+            "model",
+            "quality",
+            "precision_label",
+            "fixed_point_bits",
+            "storage_mode",
+            "avg_bpp",
+            "bpp_delta_pct",
+            "avg_psnr",
+            "psnr_delta",
+            "avg_ms_ssim",
             "tensor_storage_reduction",
             "packed_storage_reduction",
             "total_saturation_ratio",
