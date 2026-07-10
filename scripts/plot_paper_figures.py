@@ -1,3 +1,5 @@
+"""Generate paper figures from CSV tables produced by summarize_results.py."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,31 +9,50 @@ from pathlib import Path
 from typing import Iterable
 
 
-MODEL_ORDER = ["bmshj2018-hyperprior", "cheng2020-anchor", "cheng2020-attn"]
 MODEL_LABEL = {
     "bmshj2018-hyperprior": "BMShj2018",
     "cheng2020-anchor": "Cheng-anchor",
     "cheng2020-attn": "Cheng-attn",
 }
 
-MODEL_STYLE = {
-    "bmshj2018-hyperprior": {"color": "#1f77b4", "marker": "o"},
-    "cheng2020-anchor": {"color": "#d62728", "marker": "s"},
-    "cheng2020-attn": {"color": "#2ca02c", "marker": "^"},
+PRECISION_LABEL = {
+    "fp16": "FP16",
+    "bf16": "BF16",
+    "int12_fixed_packed": "INT12",
+    "int10_fixed_packed": "INT10",
+    "int8_wa_ptq_calibrated": "INT8 W+A",
+    "int8_ptq_transforms": "INT8 W",
+}
+
+PRECISION_STYLE = {
+    "fp16": {"color": "#1f77b4", "marker": "o"},
+    "bf16": {"color": "#17becf", "marker": "s"},
+    "int12_fixed_packed": {"color": "#2ca02c", "marker": "^"},
+    "int10_fixed_packed": {"color": "#ff7f0e", "marker": "D"},
+    "int8_wa_ptq_calibrated": {"color": "#d62728", "marker": "v"},
+    "int8_ptq_transforms": {"color": "#9467bd", "marker": "P"},
+}
+
+MODULE_COLOR = {
+    "conv": "#4c78a8",
+    "attention": "#e45756",
+    "residual": "#72b7b2",
+    "gdn": "#f58518",
 }
 
 
 def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        return [{k.lstrip("\ufeff"): v for k, v in row.items()} for row in reader]
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        return list(csv.DictReader(file))
 
 
-def value(row: dict[str, str] | None, key: str) -> float:
+def f(row: dict[str, str] | None, key: str) -> float:
     if row is None:
         return math.nan
     raw = row.get(key, "")
-    if raw == "":
+    if raw in {"", "None", "nan", "NaN"}:
         return math.nan
     try:
         return float(raw)
@@ -39,24 +60,13 @@ def value(row: dict[str, str] | None, key: str) -> float:
         return math.nan
 
 
-def by_model_precision(rows: Iterable[dict[str, str]]) -> dict[tuple[str, str], dict[str, str]]:
-    return {(row["model"], row["precision"]): row for row in rows}
-
-
-def baseline_row(rows: Iterable[dict[str, str]], model: str) -> dict[str, str] | None:
-    return next((row for row in rows if row["model"] == model and row["category"] == "baseline"), None)
-
-
 def configure_matplotlib() -> None:
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
         raise SystemExit(
-            "Failed to import matplotlib. This usually means the local Python "
-            "environment has an incompatible NumPy/matplotlib build. Run this "
-            "script on the server environment, or fix the local environment with "
-            "`pip install \"numpy<2\" --force-reinstall` or by reinstalling a "
-            "matplotlib version compiled for NumPy 2.x.\n"
+            "Failed to import matplotlib. Run this script on the server "
+            "environment, or reinstall a NumPy-compatible matplotlib build.\n"
             f"Original error: {exc}"
         ) from exc
 
@@ -69,12 +79,12 @@ def configure_matplotlib() -> None:
             "ytick.labelsize": 7,
             "legend.fontsize": 7,
             "axes.linewidth": 0.8,
-            "lines.linewidth": 1.4,
-            "lines.markersize": 4.2,
+            "lines.linewidth": 1.5,
+            "lines.markersize": 4.4,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
             "savefig.bbox": "tight",
-            "savefig.pad_inches": 0.02,
+            "savefig.pad_inches": 0.03,
         }
     )
 
@@ -85,181 +95,249 @@ def save_figure(fig, out_dir: Path, stem: str, dpi: int) -> None:
     fig.savefig(out_dir / f"{stem}.png", dpi=dpi)
 
 
-def set_zero_line(ax) -> None:
-    ax.axhline(0, color="0.55", linewidth=0.8, zorder=0)
+def clean_axis(ax, zero_line: bool = True) -> None:
+    if zero_line:
+        ax.axhline(0, color="0.55", linewidth=0.8, zorder=0)
     ax.grid(axis="y", color="0.88", linewidth=0.6)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
 
-def add_shared_legend(fig, handles, labels, ncol: int = 3) -> None:
+def grouped(rows: Iterable[dict[str, str]], *keys: str) -> dict[tuple[str, ...], dict[str, str]]:
+    return {tuple(row.get(key, "") for key in keys): row for row in rows}
+
+
+def plot_quality_trends(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
+    import matplotlib.pyplot as plt
+
+    models = ["cheng2020-anchor", "cheng2020-attn"]
+    precisions = ["fp16", "bf16", "int12_fixed_packed", "int10_fixed_packed", "int8_wa_ptq_calibrated"]
+    qualities = [1, 3, 5]
+    table = grouped(rows, "model", "precision", "quality")
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.4), sharex=True)
+
+    for col, model in enumerate(models):
+        for precision in precisions:
+            style = PRECISION_STYLE[precision]
+            psnr = [f(table.get((model, precision, str(q))), "psnr_delta") for q in qualities]
+            bpp = [f(table.get((model, precision, str(q))), "bpp_delta_pct") for q in qualities]
+            axes[0, col].plot(qualities, psnr, label=PRECISION_LABEL[precision], **style)
+            axes[1, col].plot(qualities, bpp, label=PRECISION_LABEL[precision], **style)
+
+        axes[0, col].set_title(MODEL_LABEL[model], fontsize=8, pad=4)
+        axes[1, col].set_xlabel("Quality index")
+
+    axes[0, 0].set_ylabel(r"$\Delta$ PSNR (dB)")
+    axes[1, 0].set_ylabel(r"$\Delta$ bpp (%)")
+    for ax in axes.ravel():
+        ax.set_xticks(qualities)
+        clean_axis(ax)
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.02),
-        ncol=ncol,
+        bbox_to_anchor=(0.5, 1.04),
+        ncol=5,
         frameon=False,
         handlelength=1.8,
+        columnspacing=1.0,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.94), w_pad=1.4, h_pad=1.0)
+    save_figure(fig, out_dir, "fig_quality_precision_trends", dpi)
+    plt.close(fig)
+
+
+def _module_rows(rows: list[dict[str, str]], analysis: str, bits: str = "8") -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows
+        if row.get("model") == "cheng2020-attn"
+        and row.get("quality") in {"1", "3", "5"}
+        and row.get("analysis") == analysis
+        and (analysis != "quant_error" or row.get("bits") == bits)
+        and row.get("module_type") in MODULE_COLOR
+    ]
+
+
+def plot_module_type_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
+    import matplotlib.pyplot as plt
+
+    quant_rows = _module_rows(rows, "quant_error", "8")
+    amp_rows = _module_rows(rows, "error_amplification")
+    if not quant_rows or not amp_rows:
+        return
+
+    module_types = ["conv", "attention", "residual", "gdn"]
+    qualities = [1, 3, 5]
+    quant = grouped(quant_rows, "quality", "module_type")
+    amp = grouped(amp_rows, "quality", "module_type")
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.8), sharex=True)
+    width = 0.18
+    x = list(range(len(qualities)))
+    offsets = {
+        module_type: (idx - 1.5) * width
+        for idx, module_type in enumerate(module_types)
+    }
+
+    for module_type in module_types:
+        xs = [value + offsets[module_type] for value in x]
+        rel_mse = [f(quant.get((str(q), module_type)), "mean_relative_mse") for q in qualities]
+        amplification = [f(amp.get((str(q), module_type)), "mean_error_amplification") for q in qualities]
+        axes[0].bar(xs, rel_mse, width=width, color=MODULE_COLOR[module_type], label=module_type)
+        axes[1].bar(xs, amplification, width=width, color=MODULE_COLOR[module_type], label=module_type)
+
+    axes[0].set_ylabel("Mean relative MSE")
+    axes[1].set_ylabel("Mean error amplification")
+    axes[0].set_yscale("log")
+    for ax in axes:
+        ax.set_xlabel("Quality index")
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(q) for q in qualities])
+        clean_axis(ax, zero_line=False)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.04),
+        ncol=4,
+        frameon=False,
+        columnspacing=1.2,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.4)
+    save_figure(fig, out_dir, "fig_module_type_sensitivity", dpi)
+    plt.close(fig)
+
+
+def plot_layer_ablation(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
+    import matplotlib.pyplot as plt
+
+    if not rows:
+        return
+    rows = [row for row in rows if row.get("layer") in {"g_a.7", "g_a.8"}]
+    table = grouped(rows, "quality", "layer")
+    qualities = [1, 3, 5]
+    layers = [("g_a.7", r"$g_a.7$ conv"), ("g_a.8", r"$g_a.8$ attention")]
+    colors = {"g_a.7": "#4c78a8", "g_a.8": "#e45756"}
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.65), sharex=True)
+    width = 0.32
+    x = list(range(len(qualities)))
+
+    for idx, (layer, label) in enumerate(layers):
+        offset = (idx - 0.5) * width
+        xs = [value + offset for value in x]
+        psnr = [f(table.get((str(q), layer)), "psnr_delta") for q in qualities]
+        bpp = [f(table.get((str(q), layer)), "bpp_delta_pct") for q in qualities]
+        axes[0].bar(xs, psnr, width=width, color=colors[layer], label=label)
+        axes[1].bar(xs, bpp, width=width, color=colors[layer], label=label)
+
+    axes[0].set_ylabel(r"$\Delta$ PSNR (dB)")
+    axes[1].set_ylabel(r"$\Delta$ bpp (%)")
+    for ax in axes:
+        ax.set_xlabel("Quality index")
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(q) for q in qualities])
+        clean_axis(ax)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.04),
+        ncol=2,
+        frameon=False,
         columnspacing=1.4,
     )
-
-
-def plot_precision_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
-    import matplotlib.pyplot as plt
-
-    table = by_model_precision(rows)
-    precision_items = [
-        ("fp16", "FP16"),
-        ("bf16", "BF16"),
-        ("int8_ptq_transforms", "INT8-W"),
-        ("int8_wa_ptq_calibrated", "INT8-WA"),
-        ("int12_fixed_packed", "INT12"),
-        ("int10_fixed_packed", "INT10"),
-    ]
-    x = list(range(len(precision_items)))
-    x_labels = [label for _, label in precision_items]
-
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.45), sharex=True)
-
-    for model in MODEL_ORDER:
-        style = MODEL_STYLE[model]
-        bpp = []
-        psnr = []
-        for precision, _ in precision_items:
-            row = table.get((model, precision))
-            bpp.append(value(row, "bpp_delta_pct"))
-            psnr.append(value(row, "psnr_delta"))
-        axes[0].plot(x, bpp, label=MODEL_LABEL[model], **style)
-        axes[1].plot(x, psnr, label=MODEL_LABEL[model], **style)
-
-    axes[0].set_ylabel(r"$\Delta$ bpp (%)")
-    axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
-    for ax in axes:
-        ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, rotation=28, ha="right")
-        set_zero_line(ax)
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    add_shared_legend(fig, handles, labels)
-    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
-    save_figure(fig, out_dir, "fig_precision_sensitivity", dpi)
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.4)
+    save_figure(fig, out_dir, "fig_layer_ablation", dpi)
     plt.close(fig)
 
 
-def plot_module_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
+def plot_fixed_storage(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
     import matplotlib.pyplot as plt
 
-    table = by_model_precision(rows)
-    module_items = [
-        ("int8_wa_ptq_calibrated_ga", r"$g_a$"),
-        ("int8_wa_ptq_calibrated_gs", r"$g_s$"),
-        ("int8_wa_ptq_calibrated_hyper", "hyper"),
+    rows = [
+        row
+        for row in rows
+        if row.get("model") in {"cheng2020-anchor", "cheng2020-attn"}
+        and row.get("quality") == "3"
+        and row.get("precision") in {"int16_fixed_tensor", "int12_fixed_packed", "int10_fixed_packed", "int8_fixed_packed"}
     ]
-    models = MODEL_ORDER
-    width = 0.23
-    x = list(range(len(module_items)))
+    if not rows:
+        return
+    table = grouped(rows, "model", "precision")
+    bits = [16, 12, 10, 8]
+    precision_for_bit = {
+        16: "int16_fixed_tensor",
+        12: "int12_fixed_packed",
+        10: "int10_fixed_packed",
+        8: "int8_fixed_packed",
+    }
+    models = ["cheng2020-anchor", "cheng2020-attn"]
+    colors = {"cheng2020-anchor": "#d62728", "cheng2020-attn": "#2ca02c"}
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.45), sharex=True)
+    fig, axes = plt.subplots(1, 2, figsize=(7.1, 2.65), sharex=True)
 
-    for model_idx, model in enumerate(models):
-        offset = (model_idx - 1) * width
-        xs = [i + offset for i in x]
-        bpp = []
-        psnr = []
-        for precision, _ in module_items:
-            row = table.get((model, precision))
-            bpp.append(value(row, "bpp_delta_pct"))
-            psnr.append(value(row, "psnr_delta"))
-        color = MODEL_STYLE[model]["color"]
-        axes[0].bar(xs, bpp, width=width, color=color, label=MODEL_LABEL[model], alpha=0.9)
-        valid_xs = [xx for xx, yy in zip(xs, psnr) if math.isfinite(yy)]
-        valid_psnr = [yy for yy in psnr if math.isfinite(yy)]
-        axes[1].bar(valid_xs, valid_psnr, width=width, color=color, label=MODEL_LABEL[model], alpha=0.9)
+    for model in models:
+        psnr = [f(table.get((model, precision_for_bit[bit])), "psnr_delta") for bit in bits]
+        storage = [
+            f(table.get((model, precision_for_bit[bit])), "packed_storage_reduction") * 100.0
+            for bit in bits
+        ]
+        axes[0].plot(bits, psnr, marker="o", color=colors[model], label=MODEL_LABEL[model])
+        axes[1].plot(bits, storage, marker="s", color=colors[model], label=MODEL_LABEL[model])
 
-    axes[0].set_ylabel(r"$\Delta$ bpp (%)")
-    axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
-    for ax in axes:
-        ax.set_xticks(x)
-        ax.set_xticklabels([label for _, label in module_items])
-        set_zero_line(ax)
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    add_shared_legend(fig, handles, labels)
-    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
-    save_figure(fig, out_dir, "fig_module_sensitivity", dpi)
-    plt.close(fig)
-
-
-def plot_fixed_point_sensitivity(rows: list[dict[str, str]], out_dir: Path, dpi: int) -> None:
-    import matplotlib.pyplot as plt
-
-    table = by_model_precision(rows)
-    bit_items = [
-        ("int16_fixed_tensor", "16"),
-        ("int12_fixed_packed", "12"),
-        ("int10_fixed_packed", "10"),
-        ("int8_fixed_packed", "8"),
-    ]
-    x = [16, 12, 10, 8]
-
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.45), sharex=True)
-
-    for model in MODEL_ORDER:
-        style = MODEL_STYLE[model]
-        bpp = []
-        psnr = []
-        for precision, _ in bit_items:
-            row = table.get((model, precision))
-            bpp.append(value(row, "bpp_delta_pct"))
-            psnr.append(value(row, "psnr_delta"))
-        axes[0].plot(x, bpp, label=MODEL_LABEL[model], **style)
-        axes[1].plot(x, psnr, label=MODEL_LABEL[model], **style)
-
-    axes[0].set_ylabel(r"$\Delta$ bpp (%)")
-    axes[1].set_ylabel(r"$\Delta$ PSNR (dB)")
+    axes[0].set_ylabel(r"$\Delta$ PSNR (dB)")
+    axes[1].set_ylabel("Activation storage reduction (%)")
     for ax in axes:
         ax.set_xlabel("Activation bit width")
-        ax.set_xticks(x)
+        ax.set_xticks(bits)
         ax.invert_xaxis()
-        set_zero_line(ax)
+        clean_axis(ax, zero_line=ax is axes[0])
 
     handles, labels = axes[0].get_legend_handles_labels()
-    add_shared_legend(fig, handles, labels)
-    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.5)
-    save_figure(fig, out_dir, "fig_fixed_point_sensitivity", dpi)
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.04),
+        ncol=2,
+        frameon=False,
+        columnspacing=1.4,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.9), w_pad=1.4)
+    save_figure(fig, out_dir, "fig_fixed_point_storage_tradeoff", dpi)
     plt.close(fig)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Generate paper-ready figures from summarized codec results."
-    )
-    parser.add_argument(
-        "--summary",
-        type=Path,
-        default=Path("results/tables/main_codec_summary.csv"),
-        help="Path to main_codec_summary.csv generated by scripts/summarize_results.py.",
-    )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
-        default=Path("paper/figures"),
-        help="Directory for PDF and PNG outputs.",
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tables", type=Path, default=Path("results/tables"), help="Input CSV table directory.")
+    parser.add_argument("--out-dir", type=Path, default=Path("results/figures"), help="Figure output directory.")
     parser.add_argument("--dpi", type=int, default=300, help="PNG output resolution.")
     args = parser.parse_args()
 
     configure_matplotlib()
-    rows = read_rows(args.summary)
-    plot_precision_sensitivity(rows, args.out_dir, args.dpi)
-    plot_module_sensitivity(rows, args.out_dir, args.dpi)
-    plot_fixed_point_sensitivity(rows, args.out_dir, args.dpi)
+    quality_rows = read_rows(args.tables / "paper_quality_trends.csv")
+    module_rows = read_rows(args.tables / "paper_module_type_sensitivity.csv")
+    layer_rows = read_rows(args.tables / "paper_layer_ablation.csv")
+    storage_rows = read_rows(args.tables / "paper_fixed_storage.csv")
 
-    print(f"Saved figures to {args.out_dir}:")
-    print("  fig_precision_sensitivity.pdf/.png")
-    print("  fig_module_sensitivity.pdf/.png")
-    print("  fig_fixed_point_sensitivity.pdf/.png")
+    plot_quality_trends(quality_rows, args.out_dir, args.dpi)
+    plot_module_type_sensitivity(module_rows, args.out_dir, args.dpi)
+    plot_layer_ablation(layer_rows, args.out_dir, args.dpi)
+    plot_fixed_storage(storage_rows, args.out_dir, args.dpi)
+
+    print(f"Saved figures to: {args.out_dir}")
+    for path in sorted(args.out_dir.glob("fig_*.*")):
+        print(f"  {path}")
 
 
 if __name__ == "__main__":
