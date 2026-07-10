@@ -235,12 +235,14 @@ def _main_codec_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _paper_q3_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output = []
     for row in rows:
+        if str(row.get("model")) not in MODEL_ORDER:
+            continue
         if int(row.get("quality") or 0) != 3:
             continue
         if str(row.get("precision")) not in MAIN_PRECISION_ORDER:
             continue
         output.append(row)
-    return sorted(output, key=_model_sort_key)
+    return sorted(_deduplicate_paper_rows(output), key=_model_sort_key)
 
 
 def _paper_quality_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -255,7 +257,26 @@ def _paper_quality_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if str(row.get("precision")) not in MAIN_PRECISION_ORDER:
             continue
         output.append(row)
-    return sorted(output, key=_model_sort_key)
+    return sorted(_deduplicate_paper_rows(output), key=_model_sort_key)
+
+
+def _paper_row_rank(row: dict[str, Any]) -> tuple[int, int, int]:
+    precision = str(row.get("precision", ""))
+    calibration_images = int(row.get("calibration_num_images") or 0)
+    invalid = int(row.get("num_invalid_reconstructions") or 0)
+    is_independent_calibration = 1 if precision == "int8_wa_ptq_calibrated" and calibration_images == 20 else 0
+    has_finite_metrics = 1 if _finite(row.get("avg_psnr")) and _finite(row.get("avg_ms_ssim")) else 0
+    return is_independent_calibration, has_finite_metrics, -invalid
+
+
+def _deduplicate_paper_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    best: dict[tuple[Any, Any, Any, Any], dict[str, Any]] = {}
+    for row in rows:
+        key = row.get("model"), row.get("quality"), row.get("metric"), row.get("precision")
+        current = best.get(key)
+        if current is None or _paper_row_rank(row) > _paper_row_rank(current):
+            best[key] = row
+    return list(best.values())
 
 
 def _layer_name(row: dict[str, Any]) -> str:
