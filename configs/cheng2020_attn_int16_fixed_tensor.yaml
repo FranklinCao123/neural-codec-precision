@@ -1,0 +1,40 @@
+experiment:
+  name: cheng2020_attn_int16_fixed_tensor
+  seed: 1234
+
+model:
+  source: compressai
+  name: cheng2020-attn
+  quality: 3
+  metric: mse
+  pretrained: true
+
+data:
+  dataset: kodak
+  root: data/kodak
+  batch_size: 1
+  num_workers: 0
+
+precision:
+  mode: int16_fixed_tensor
+  method: fixed_point_activation_codec
+  fixed_point_bits: 16
+  fractional_bits: null
+  storage_mode: tensor
+  activation_modules:
+    - g_a
+    - g_s
+    - h_a
+    - h_s
+
+evaluation:
+  metrics:
+    - bpp
+    - psnr
+    - ms_ssim
+  benchmark_forward: false
+  benchmark_memory: true
+  save_reconstructions: false
+
+output:
+  dir: results/raw/cheng2020_attn_int16_fixed_tensor
